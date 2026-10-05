@@ -1,4 +1,4 @@
-// this file is used to sort go file
+// go-sort 按声明规则排序 Go 源文件。
 package main
 
 import (
@@ -19,12 +19,7 @@ import (
 	"strings"
 )
 
-// sort a go file,
-// sort constants, variables, functions, structs, interfaces in order of their appearance in the file
-// export units are on top, non-export units are below
-// sort units by FirstLetter ASC
-
-// the following is the code to generate the sort executable file
+// 声明按分组排序，导出名称优先，同组按名称排序。
 
 //go:generate go mod tidy
 //go:generate go install -v -trimpath -ldflags "-s -w" go-sort.go
@@ -49,20 +44,26 @@ type config struct {
 	write        bool
 }
 
+type fileOptions struct {
+	includeTests bool
+	recursive    bool
+}
+
 type letterDecl struct {
+	// Letter 是用于排序的原始声明名。
 	Letter string
-	Decl   ast.Decl
+	// Decl 是保持原始内容的声明节点。
+	Decl ast.Decl
 }
 
 type letterDeclList []letterDecl
 
+// Len 返回声明数。
 func (l letterDeclList) Len() int { return len(l) }
 
+// Less 比较导出性和声明名。
 func (l letterDeclList) Less(i, j int) bool {
-	// Deterministic ordering:
-	// 1) exported (upper-case) first
-	// 2) case-insensitive letter order
-	// 3) original string compare as tie-breaker
+	// 导出名称优先，再忽略大小写比较，最后比较原始名称。
 	a, b := l[i].Letter, l[j].Letter
 	ai, bi := isExportedName(a), isExportedName(b)
 	if ai != bi {
@@ -75,12 +76,8 @@ func (l letterDeclList) Less(i, j int) bool {
 	return a < b
 }
 
+// Swap 交换声明位置。
 func (l letterDeclList) Swap(i, j int) { l[i], l[j] = l[j], l[i] }
-
-type fileOptions struct {
-	includeTests bool
-	recursive    bool
-}
 
 func getDirGoFiles(dir string, options fileOptions) ([]string, error) {
 	if dir == "./..." || dir == "./" || dir == "." || dir == "" {
@@ -145,20 +142,20 @@ func getTypeFromFile(f *ast.File, name string) ast.Decl {
 		return nil
 	}
 	for _, decl := range f.Decls {
-		_decl, ok := decl.(*ast.GenDecl)
-		if !ok {
+		declaration, declarationOK := decl.(*ast.GenDecl)
+		if !declarationOK {
 			continue
 		}
-		if _decl.Tok != token.TYPE {
+		if declaration.Tok != token.TYPE {
 			continue
 		}
-		for _, spec := range _decl.Specs {
-			ts, _ok := spec.(*ast.TypeSpec)
-			if !_ok {
+		for _, spec := range declaration.Specs {
+			ts, typeOK := spec.(*ast.TypeSpec)
+			if !typeOK {
 				continue
 			}
 			if ts.Name != nil && ts.Name.Name == name {
-				return _decl
+				return declaration
 			}
 		}
 	}
@@ -236,7 +233,7 @@ func sortActionByFilename(filename string, write bool) (changed bool, err error)
 		return false, err
 	}
 	ast.SortImports(fSet, f)
-	content, err := os.ReadFile(filename)
+	content, err := os.ReadFile(filename) // #nosec G304 -- CLI 明确指定待排序源码，允许读取该路径。
 	if err != nil {
 		return false, err
 	}
@@ -248,7 +245,7 @@ func sortActionByFilename(filename string, write bool) (changed bool, err error)
 	out := buf.Bytes()
 	changed = !bytes.Equal(content, out)
 	if write {
-		if err = os.WriteFile(filename, out, 0644); err != nil {
+		if err = os.WriteFile(filename, out, 0o644); err != nil { // #nosec G306 -- 排序已有源码，保留原有权限与既有写入行为。
 			return false, err
 		}
 	}
@@ -281,6 +278,7 @@ func typeNameFromExpr(expr ast.Expr) string {
 		if id, ok := t.X.(*ast.Ident); ok {
 			return id.Name
 		}
+	default:
 	}
 	return ""
 }
@@ -305,24 +303,24 @@ func write2buf(buf *bytes.Buffer, f *ast.File, content []byte) (err error) {
 }
 
 func write2bufAsDecl(buf *bytes.Buffer, content []byte, decl ast.Decl, writeLine bool) {
-	_decl := decl.(*ast.GenDecl)
-	posStart := _decl.Pos() - 1
-	if _decl.Doc != nil {
-		posStart = _decl.Doc.Pos() - 1
+	declaration := decl.(*ast.GenDecl)
+	posStart := declaration.Pos() - 1
+	if declaration.Doc != nil {
+		posStart = declaration.Doc.Pos() - 1
 	}
-	buf.Write(content[posStart:_decl.End()])
+	buf.Write(content[posStart:declaration.End()])
 	if writeLine {
 		buf.WriteString("\n")
 	}
 }
 
 func write2bufAsFunc(buf *bytes.Buffer, content []byte, decl ast.Decl, writeLine bool) {
-	_decl := decl.(*ast.FuncDecl)
-	posStart := _decl.Pos() - 1
-	if _decl.Doc != nil {
-		posStart = _decl.Doc.Pos() - 1
+	declaration := decl.(*ast.FuncDecl)
+	posStart := declaration.Pos() - 1
+	if declaration.Doc != nil {
+		posStart = declaration.Doc.Pos() - 1
 	}
-	buf.Write(content[posStart:_decl.End()])
+	buf.Write(content[posStart:declaration.End()])
 	if writeLine {
 		buf.WriteString("\n")
 	}
@@ -331,24 +329,24 @@ func write2bufAsFunc(buf *bytes.Buffer, content []byte, decl ast.Decl, writeLine
 func write2bufFunc(buf *bytes.Buffer, f *ast.File, content []byte, writeLine bool) {
 	var list = make(letterDeclList, 0)
 	for _, decl := range f.Decls {
-		_decl, ok := decl.(*ast.FuncDecl)
-		if !ok {
+		declaration, declarationOK := decl.(*ast.FuncDecl)
+		if !declarationOK {
 			continue
 		}
-		//if main or init, skip
-		if _decl.Name != nil && (_decl.Name.Name == "main" || _decl.Name.Name == "init") {
+		// main 与 init 在文件前部单独写出。
+		if declaration.Name != nil && (declaration.Name.Name == "main" || declaration.Name.Name == "init") {
 			continue
 		}
-		//if is a receiver function, and the receiver type is in the same file, skip
-		if _decl.Recv != nil {
-			if getTypeFromFile(f, getFuncReceiverTypeName(_decl)) != nil {
+		// 同文件类型的接收者方法随类型写出。
+		if declaration.Recv != nil {
+			if getTypeFromFile(f, getFuncReceiverTypeName(declaration)) != nil {
 				continue
 			}
 		}
-		if _decl.Name == nil {
+		if declaration.Name == nil {
 			continue
 		}
-		list = append(list, letterDecl{Letter: _decl.Name.Name, Decl: _decl})
+		list = append(list, letterDecl{Letter: declaration.Name.Name, Decl: declaration})
 	}
 	sort.Stable(list)
 	for _, node := range list {
@@ -359,46 +357,45 @@ func write2bufFunc(buf *bytes.Buffer, f *ast.File, content []byte, writeLine boo
 func write2bufGenDecl(buf *bytes.Buffer, f *ast.File, content []byte, tk token.Token, writeLine bool) {
 	var list = make(letterDeclList, 0)
 	for _, decl := range f.Decls {
-		_decl, ok := decl.(*ast.GenDecl)
-		if !ok {
+		declaration, declarationOK := decl.(*ast.GenDecl)
+		if !declarationOK {
 			continue
 		}
-		if _decl.Tok != tk || _decl.Tok == token.IMPORT {
+		if declaration.Tok != tk || declaration.Tok == token.IMPORT {
 			continue
 		}
-		// If a decl has multiple specs, we still sort by the first spec's name.
-		// (We keep the decl group intact to avoid surprising rewrites.)
+		// 多 spec 声明按首项排序，保持整个声明组不拆分。
 		switch tk {
 		case token.CONST, token.VAR:
-			if len(_decl.Specs) == 0 {
+			if len(declaration.Specs) == 0 {
 				continue
 			}
-			vs, ok := _decl.Specs[0].(*ast.ValueSpec)
-			if !ok || len(vs.Names) == 0 || vs.Names[0] == nil {
+			vs, valueOK := declaration.Specs[0].(*ast.ValueSpec)
+			if !valueOK || len(vs.Names) == 0 || vs.Names[0] == nil {
 				continue
 			}
-			list = append(list, letterDecl{Letter: vs.Names[0].Name, Decl: _decl})
+			list = append(list, letterDecl{Letter: vs.Names[0].Name, Decl: declaration})
 		case token.TYPE:
-			if len(_decl.Specs) == 0 {
+			if len(declaration.Specs) == 0 {
 				continue
 			}
-			ts, ok := _decl.Specs[0].(*ast.TypeSpec)
-			if !ok || ts.Name == nil {
+			ts, typeOK := declaration.Specs[0].(*ast.TypeSpec)
+			if !typeOK || ts.Name == nil {
 				continue
 			}
-			list = append(list, letterDecl{Letter: ts.Name.Name, Decl: _decl})
+			list = append(list, letterDecl{Letter: ts.Name.Name, Decl: declaration})
 		default:
 		}
 	}
 	sort.Stable(list)
 	for _, node := range list {
 		write2bufAsDecl(buf, content, node.Decl, writeLine)
-		_decl := node.Decl.(*ast.GenDecl)
-		if _decl.Tok == token.TYPE {
-			//get the group of types, and write receiver function
-			for _, spec := range _decl.Specs {
-				ts, ok := spec.(*ast.TypeSpec)
-				if !ok || ts.Name == nil {
+		declaration := node.Decl.(*ast.GenDecl)
+		if declaration.Tok == token.TYPE {
+			// 按类型组内原顺序写出各类型的接收者方法。
+			for _, spec := range declaration.Specs {
+				ts, typeOK := spec.(*ast.TypeSpec)
+				if !typeOK || ts.Name == nil {
 					continue
 				}
 				writeTypesReceiverFunc(f, ts.Name.Name, buf, content, writeLine)
@@ -410,9 +407,9 @@ func write2bufGenDecl(buf *bytes.Buffer, f *ast.File, content []byte, tk token.T
 func write2bufTop(buf *bytes.Buffer, f *ast.File, content []byte) {
 	list := make(letterDeclList, 0)
 	for _, decl := range f.Decls {
-		if _decl, ok := decl.(*ast.GenDecl); ok {
-			if _decl.Tok == token.IMPORT {
-				list = append(list, letterDecl{Letter: "import", Decl: _decl})
+		if declaration, declarationOK := decl.(*ast.GenDecl); declarationOK {
+			if declaration.Tok == token.IMPORT {
+				list = append(list, letterDecl{Letter: "import", Decl: declaration})
 			}
 		}
 	}
@@ -434,16 +431,16 @@ func write2bufTopComment(buf *bytes.Buffer, f *ast.File, content []byte) {
 
 func writeMain(buf *bytes.Buffer, f *ast.File, content []byte) {
 	for _, decl := range f.Decls {
-		_decl, ok := decl.(*ast.FuncDecl)
-		if !ok {
+		declaration, declarationOK := decl.(*ast.FuncDecl)
+		if !declarationOK {
 			continue
 		}
-		// if it has receiver, skip
-		if _decl.Recv != nil {
+		// 接收者方法不作为入口函数写出。
+		if declaration.Recv != nil {
 			continue
 		}
-		if _decl.Name.Name == "main" || _decl.Name.Name == "init" {
-			write2bufAsFunc(buf, content, _decl, true)
+		if declaration.Name.Name == "main" || declaration.Name.Name == "init" {
+			write2bufAsFunc(buf, content, declaration, true)
 		}
 	}
 }
@@ -452,7 +449,7 @@ func writePkg(buf *bytes.Buffer, fSet *token.FileSet, f *ast.File, content []byt
 	line := fSet.Position(f.Package).Line
 	var bufTop = make([]byte, 0)
 	var idx = 0
-	for i := 0; i < line; i++ {
+	for range line {
 		c := bytes.IndexByte(content[idx:], '\n')
 		if c == -1 {
 			break
@@ -463,24 +460,24 @@ func writePkg(buf *bytes.Buffer, fSet *token.FileSet, f *ast.File, content []byt
 	buf.Write(bufTop)
 }
 
-// writeTypesReceiverFunc write receiver function of type
+// writeTypesReceiverFunc 写出指定类型的接收者方法。
 func writeTypesReceiverFunc(f *ast.File, name string, buf *bytes.Buffer, content []byte, writeLine bool) {
 	var list = make(letterDeclList, 0)
 	for _, decl := range f.Decls {
-		_decl, ok := decl.(*ast.FuncDecl)
-		if !ok {
+		declaration, declarationOK := decl.(*ast.FuncDecl)
+		if !declarationOK {
 			continue
 		}
-		if _decl.Recv == nil {
+		if declaration.Recv == nil {
 			continue
 		}
-		if getFuncReceiverTypeName(_decl) != name {
+		if getFuncReceiverTypeName(declaration) != name {
 			continue
 		}
-		if _decl.Name == nil {
+		if declaration.Name == nil {
 			continue
 		}
-		list = append(list, letterDecl{Letter: _decl.Name.Name, Decl: _decl})
+		list = append(list, letterDecl{Letter: declaration.Name.Name, Decl: declaration})
 	}
 	sort.Stable(list)
 	for _, node := range list {

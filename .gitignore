@@ -30,3 +30,6 @@ tests
 *_tmp.*
 *.log
 go-sort
+
+.agent-bus/
+.codex/

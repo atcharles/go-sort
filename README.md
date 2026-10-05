@@ -19,3 +19,17 @@ go-sort path/to/file.go   # 排序单个非测试 Go 文件
 保留的旧位置形式：无参数、`.`、`./`、空路径与 `./...` 均指当前目录；文件和目录路径均支持；多个位置参数沿用“最后一个是路径”的规则，其余忽略（首个 `test` 除外）。`./...` 是当前目录的别名，递归与否仍由 `-r` 决定。使用标准库 flag：选项必须写在位置参数前，`--` 可结束选项解析；`go-sort test -r=false .` 中的 `-r=false` 不会作为选项解析，应写 `go-sort -r=false test .`。
 
 遍历跳过 `.git` 和 `vendor`；读取或遍历失败会报告错误。工具沿用既有声明与注释处理规则，不替代 gofmt/goimports，也不负责跨文件依赖分析。
+
+## 开发
+
+使用 Go 1.27.1（两个 go.mod 均声明 `go 1.27.1`）。Go 会将与 go 版本相同的冗余 toolchain 指令移除；保留它会导致命令要求 go mod tidy，因此采用 Go 的标准化模块格式。`make help` 列出命令；`make fmt` 依次运行本项目的 `go run . -tests .`、gofmt、goimports。`make ci` 按顺序执行临时副本格式检查（无差异且不修改工作区）、lint、style-check、vuln、`test -race`。
+
+`tools/go.mod` 用 tool 指令独立锁定 golangci-lint v2、govulncheck、goimports、noelse，统一经 `go tool -modfile=tools/go.mod` 调用。noelse 采用 tool 方式而不是无版本 `go run`，以保证规则版本可重现，并隔离私有 kit 的依赖图；`github.com/glibtools/kit` 为私有模块，开发机/CI 需配置 `GOPRIVATE=github.com/glibtools/*` 和 Git 只读访问权限。安装与使用 go-sort 本身无需访问 kit。
+
+`.golangci.yml` 复制自 kit 的共享配置，保留全部规则与 depguard 禁用清单，并加强 govet shadow `strict: true`、exported 文档注释及 switch default 检查。代码与测试禁止 else。测试使用标准库 testing + go-cmp；黄金样例来自 main bbf5a84，修改排序须先更新测试并解释兼容性影响。
+
+`make deps-check` 查看升级，`make deps-upgrade` 升级两个模块并执行 ci。Go 1.27.1 与工具版本按本次官方模块元数据核对；go-cmp、goimports、govulncheck 使用 Go Authors 的 BSD 许可，golangci-lint 为 GPL-3.0，仅作为独立开发工具运行，不链接进发布二进制。工具依赖量较大，因此与主模块分离；主模块仅为测试引入 go-cmp。
+
+旧 tools.sh 含删除 .git、重建历史与强推操作，已删除；其 gosort 功能由 `make fmt` 取代。本项目是命令行排序工具，没有数据库、迁移或服务集成测试，因此只提供适用的工具链目标。
+
+工具间接依赖暂缓升级：glob v1.0.0 移除了 `glob.Glob`，exhaustive v0.14.0 与 predeclared v0.3.0 移除了 golangci-lint v2.14.0 使用的导出 flag 常量，实际编译失败。因此分别锁定 glob v0.2.3、exhaustive v0.13.0、predeclared v0.2.2，其他依赖已尝试升级至最新稳定版；待新版 golangci-lint 支持这些 API 后，在 `make deps-upgrade` 移除兼容版本固定并重新执行 ci。

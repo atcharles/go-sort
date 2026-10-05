@@ -1,0 +1,95 @@
+# glibtools 共享 golangci-lint v2 配置（标准 15、ADR-019）。
+# 新项目由模板复制本文件；项目只可追加规则，不可关闭共享规则。
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - revive
+    - gocritic
+    - bodyclose
+    - copyloopvar
+    - errorlint
+    - nilerr
+    - gosec
+    - modernize
+    - predeclared
+    - forbidigo
+    - depguard
+  settings:
+    govet:
+      enable:
+        - shadow
+      settings:
+        shadow:
+          strict: true
+    revive:
+      rules:
+        - name: exported
+        - name: enforce-switch-style
+    staticcheck:
+      checks: ["all", "-ST1000"]
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (net.Listener).Close
+        - (net.Conn).Close
+        - os.Remove
+    depguard:
+      rules:
+        banned:
+          list-mode: lax
+          deny:
+            - { pkg: github.com/spf13/viper, desc: "用 kit/app/config（koanf）— ADR-003" }
+            - { pkg: github.com/sirupsen/logrus, desc: "用 *slog.Logger — ADR-004" }
+            - { pkg: go.uber.org/zap, desc: "业务代码用 *slog.Logger — ADR-004" }
+            - { pkg: github.com/gin-gonic/gin, desc: "用 kit/web/httpapi（chi + Huma）— ADR-007" }
+            - { pkg: github.com/kataras/iris, desc: "用 kit/web/httpapi（chi + Huma）— ADR-007" }
+            - { pkg: github.com/labstack/echo, desc: "用 kit/web/httpapi（chi + Huma）— ADR-007" }
+            - { pkg: github.com/gofiber/fiber, desc: "用 kit/web/httpapi（chi + Huma）— ADR-007" }
+            - { pkg: github.com/pkg/errors, desc: "用 fmt.Errorf %w 与 errors.Is/As — ADR-005" }
+            - { pkg: github.com/stretchr/testify, desc: "用标准库 testing + go-cmp — ADR-018" }
+            - { pkg: github.com/hibiken/asynq, desc: "用 kit/async/queue（River）或 kit/async/mqe — ADR-013" }
+            - { pkg: github.com/google/wire, desc: "用 fx — ADR-002" }
+            - { pkg: github.com/patrickmn/go-cache, desc: "用 otter v2（kit/data/cache）— ADR-012" }
+            - { pkg: github.com/allegro/bigcache, desc: "用 otter v2（kit/data/cache）— ADR-012" }
+            - { pkg: github.com/coocood/freecache, desc: "用 otter v2（kit/data/cache）— ADR-012" }
+            - { pkg: github.com/dgraph-io/ristretto, desc: "用 otter v2（kit/data/cache）— ADR-012" }
+            - { pkg: github.com/jellydator/ttlcache, desc: "用 otter v2（kit/data/cache）— ADR-012" }
+            - { pkg: github.com/eclipse/paho.mqtt.golang, desc: "用 github.com/eclipse/paho.golang（MQTT 5）— ADR-012" }
+            - { pkg: github.com/go-redis/redis, desc: "用 github.com/redis/go-redis/v9 — ADR-012" }
+            - { pkg: github.com/dgrijalva/jwt-go, desc: "登录态用不透明会话令牌 — ADR-014" }
+            - { pkg: github.com/glibtools/libs, desc: "旧库已冻结，用 github.com/glibtools/kit — ADR-023" }
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: '^os\.(Getenv|LookupEnv)$'
+          msg: "配置只经 kit/app/config 读取 — 标准 03"
+        - pattern: '^lo\.(Contains|ContainsBy|IndexOf|LastIndexOf|Keys|Values|Max|Min|Reverse|Uniq|Every|Some|Count)$'
+          msg: "标准库已有等价实现（slices/maps/max/min），不要用 lo 的重复函数 — 标准 18"
+        - pattern: '^cast\.ToFloat(32|64)(E)?$'
+          msg: "金额禁止经 cast 转浮点；用 kit/lang/money — 标准 18"
+        - pattern: 'defer\s+.*\.Body\.Close\(\)'
+          msg: "读取响应后显式关闭并处理错误"
+  exclusions:
+    generated: lax
+    rules:
+      - path: _test\.go
+        linters: [gosec, errcheck]
+      - path: (^|/)(cmd|app/config|internal/config)/
+        text: "os\\.(Getenv|LookupEnv)"
+        linters: [forbidigo]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  max-same-issues: 50
