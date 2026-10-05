@@ -1,0 +1,26 @@
+//go:build example
+
+// Package sample 保留包注释。
+package sample
+
+import "fmt"
+
+// 游离注释。
+
+// Value 保留变量注释。
+var Value = 1
+
+// Alpha 保留类型注释。
+type Alpha struct {
+	// Field 保留字段注释。
+	Field int
+}
+
+// Method 保留方法注释。
+func (a Alpha) Method() {}
+
+// Zed 保留函数注释。
+func Zed() {
+	// 保留函数体注释。
+	fmt.Println("hello")
+}

@@ -1,0 +1,2 @@
+// Package sample 包行前缀保持原样。
+package sample

@@ -1,0 +1,21 @@
+package sample
+
+type (
+	zebra          struct{}
+	Box[T any]     struct{}
+	Pair[A, B any] struct{}
+)
+
+func (z zebra) Zap() {}
+
+func (b *Box[T]) Alpha() {}
+
+func (b *Box[T]) Upper() {}
+
+func (b Box[T]) lower() {}
+
+func (p Pair[A, B]) Alpha() {}
+
+func (p *Pair[A, B]) zed() {}
+
+func Standalone() {}

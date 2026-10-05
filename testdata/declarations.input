@@ -1,0 +1,27 @@
+package sample
+
+func zebra() {}
+func Alpha() {}
+func aLPHA() {}
+func alpha() {}
+func init() {}
+func main() {}
+func init() {}
+var zebraVar = 1
+var AlphaVar = 2
+const zebraConst = 1
+const AlphaConst = 2
+type zebraType struct{}
+type AlphaType interface { Do() }
+func (z zebraType) zed() {}
+func (z zebraType) Apple() {}
+func (a AlphaType) Beta() {}
+func (u Unknown) External() {}
+const (
+    Group = iota
+    grouped
+)
+var (
+    GroupVar = 1
+    groupedVar = 2
+)
