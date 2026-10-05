@@ -1,0 +1,4 @@
+package sample
+
+var Zebra = 1
+var Alpha = 2

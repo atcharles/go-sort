@@ -1,0 +1,2 @@
+// Package sample 包行没有结尾换行。
+package sample

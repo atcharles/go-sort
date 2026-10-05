@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -29,14 +28,14 @@ func TestDeclarationOrder(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			list := make(letterDeclList, 0, len(tc.input))
+			list := make([]namedDeclaration, 0, len(tc.input))
 			for _, name := range tc.input {
-				list = append(list, letterDecl{Letter: name})
+				list = append(list, namedDeclaration{name: name})
 			}
-			sort.Stable(list)
+			sortDeclarations(list)
 			got := make([]string, 0, len(list))
 			for _, entry := range list {
-				got = append(got, entry.Letter)
+				got = append(got, entry.name)
 			}
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Fatalf("排序差异 (-want +got):\n%s", diff)
@@ -87,10 +86,10 @@ func TestDirectoryOptions(t *testing.T) {
 	}
 }
 
-// TestGoldenSort 用 main bbf5a84 的输出验证排序、注释与包行保持兼容。
+// TestGoldenSort 固定 main 输出及无结尾换行输入的修复后输出。
 func TestGoldenSort(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"declarations", "generics", "comments", "package"} {
+	for _, name := range []string{"declarations", "generics", "comments", "package", "eof", "package_eof", "comment_eof", "value_eof"} {
 		t.Run(name, func(t *testing.T) {
 			input := readTestFile(t, filepath.Join("testdata", name+".input"))
 			want := readTestFile(t, filepath.Join("testdata", name+".golden"))
@@ -118,6 +117,20 @@ func TestGoldenSort(t *testing.T) {
 				t.Fatal("重复排序改变输出")
 			}
 		})
+	}
+}
+
+// TestInputPathAliases 验证当前目录的路径别名均可通过路径校验。
+func TestInputPathAliases(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{"", ".", "./", "./..."} {
+		resolved, resolveErr := resolveInputPath(path)
+		if resolveErr != nil {
+			t.Fatal(resolveErr)
+		}
+		if filepath.Clean(resolved) != "." {
+			t.Fatalf("路径 %q 解析为 %q", path, resolved)
+		}
 	}
 }
 
@@ -189,6 +202,39 @@ func TestReceiverTypeName(t *testing.T) {
 	}
 }
 
+// TestSortErrors 验证失败不会写坏文件，底层路径错误可以解包。
+func TestSortErrors(t *testing.T) {
+	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "missing.go")
+	_, missingErr := sortActionByFilename(missing, true)
+	if !errors.Is(missingErr, os.ErrNotExist) {
+		t.Fatalf("缺失文件错误: %v", missingErr)
+	}
+	invalid := filepath.Join(t.TempDir(), "invalid.go")
+	input := []byte("package sample\nfunc Broken(\n")
+	writeTestFile(t, invalid, input)
+	_, parseErr := sortActionByFilename(invalid, true)
+	if parseErr == nil {
+		t.Fatal("非法源码应报错")
+	}
+	if diff := cmp.Diff(input, readTestFile(t, invalid)); diff != "" {
+		t.Fatal(diff)
+	}
+	_, walkErr := getDirGoFiles(missing, fileOptions{recursive: true})
+	if !errors.Is(walkErr, os.ErrNotExist) {
+		t.Fatalf("缺失目录错误: %v", walkErr)
+	}
+}
+
+// TestSortFileMissingPath 验证命令流程返回可解包错误，不在库函数内退出进程。
+func TestSortFileMissingPath(t *testing.T) {
+	t.Parallel()
+	cfg := config{path: filepath.Join(t.TempDir(), "missing"), recursive: true, write: true}
+	if sortErr := sortFile(cfg); !errors.Is(sortErr, os.ErrNotExist) {
+		t.Fatalf("缺失路径错误: %v", sortErr)
+	}
+}
+
 // TestTestsAliasSort 验证 test 与 -tests 对文件产生相同效果。
 func TestTestsAliasSort(t *testing.T) {
 	t.Parallel()
@@ -228,12 +274,12 @@ func TestTypeLookup(t *testing.T) {
 		t.Fatal(parseErr)
 	}
 	for _, name := range []string{"A", "B"} {
-		if got := getTypeFromFile(file, name); got != file.Decls[1] {
+		if got := indexDeclarations(file).types[name]; got != file.Decls[1] {
 			t.Fatalf("未找到分组类型 %s", name)
 		}
 	}
 	for _, name := range []string{"", "Missing"} {
-		if got := getTypeFromFile(file, name); got != nil {
+		if got := indexDeclarations(file).types[name]; got != nil {
 			t.Fatalf("意外找到 %s", name)
 		}
 	}

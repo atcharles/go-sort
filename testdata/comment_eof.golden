@@ -1,0 +1,5 @@
+package sample
+
+// 文件末尾的游离注释。
+
+func F() {}
