@@ -1,9 +1,12 @@
 package main
 
 import (
+	"errors"
+	"flag"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -136,5 +139,118 @@ func writeTestFile(t *testing.T, path string, data []byte) {
 	t.Helper()
 	if writeErr := os.WriteFile(path, data, 0o600); writeErr != nil {
 		t.Fatal(writeErr)
+	}
+}
+
+// TestDirectoryOptions 回归递归与测试文件选择的四种组合。
+func TestDirectoryOptions(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name                    string
+		recursive, includeTests bool
+		want                    []string
+	}{
+		{"recursive_without_tests", true, false, []string{"a.go", "sub/b.go"}},
+		{"recursive_with_tests", true, true, []string{"a.go", "a_test.go", "sub/b.go", "sub/b_test.go"}},
+		{"local_without_tests", false, false, []string{"a.go"}},
+		{"local_with_tests", false, true, []string{"a.go", "a_test.go"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, relative := range []string{"a.go", "a_test.go", "sub/b.go", "sub/b_test.go", "vendor/v.go", ".git/g.go", "notes.txt"} {
+				path := filepath.Join(dir, relative)
+				if mkdirErr := os.MkdirAll(filepath.Dir(path), 0o700); mkdirErr != nil {
+					t.Fatal(mkdirErr)
+				}
+				writeTestFile(t, path, []byte("package sample\n"))
+			}
+			files, walkErr := getDirGoFiles(dir, fileOptions{includeTests: tc.includeTests, recursive: tc.recursive})
+			if walkErr != nil {
+				t.Fatal(walkErr)
+			}
+			got := make([]string, 0, len(files))
+			for _, path := range files {
+				relative, relErr := filepath.Rel(dir, path)
+				if relErr != nil {
+					t.Fatal(relErr)
+				}
+				got = append(got, filepath.ToSlash(relative))
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Fatalf("文件选择差异 (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestParseFlags 固定 test 别名、默认值和旧位置路径行为。
+func TestParseFlags(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		args []string
+		want config
+	}{
+		{"defaults", nil, config{".", true, false, true}},
+		{"path", []string{"."}, config{".", true, false, true}},
+		{"tests_flag", []string{"-tests", "."}, config{".", true, true, true}},
+		{"tests_alias", []string{"test", "."}, config{".", true, true, true}},
+		{"alias_default_path", []string{"test"}, config{".", true, true, true}},
+		{"alias_with_flags", []string{"-r=false", "-w=false", "test", "src"}, config{"src", false, true, false}},
+		{"last_path", []string{"ignored", "src"}, config{"src", true, false, true}},
+		{"ellipsis", []string{"./..."}, config{"./...", true, false, true}},
+		{"explicit_test_path", []string{"./test"}, config{"./test", true, false, true}},
+		{"flag_terminator", []string{"--", "-source"}, config{"-source", true, false, true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, parseErr := parseFlags(tc.args, io.Discard)
+			if parseErr != nil {
+				t.Fatal(parseErr)
+			}
+			if diff := cmp.Diff(tc.want, got, cmp.AllowUnexported(config{})); diff != "" {
+				t.Fatal(diff)
+			}
+		})
+	}
+	_, helpErr := parseFlags([]string{"-h"}, io.Discard)
+	if !errors.Is(helpErr, flag.ErrHelp) {
+		t.Fatalf("help: %v", helpErr)
+	}
+	_, invalidErr := parseFlags([]string{"-unknown"}, io.Discard)
+	if invalidErr == nil {
+		t.Fatal("未知参数应报错")
+	}
+}
+
+// TestTestsAliasSort 验证 test 与 -tests 对文件产生相同效果。
+func TestTestsAliasSort(t *testing.T) {
+	t.Parallel()
+	input := readTestFile(t, filepath.Join("testdata", "declarations.input"))
+	want := readTestFile(t, filepath.Join("testdata", "declarations.golden"))
+	for _, args := range [][]string{{}, {"-tests"}, {"test"}} {
+		dir := t.TempDir()
+		sourcePath := filepath.Join(dir, "sample.go")
+		testPath := filepath.Join(dir, "sample_test.go")
+		writeTestFile(t, sourcePath, input)
+		writeTestFile(t, testPath, input)
+		cfg, parseErr := parseFlags(append(args, dir), io.Discard)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		if sortErr := sortFile(cfg); sortErr != nil {
+			t.Fatal(sortErr)
+		}
+		if diff := cmp.Diff(want, readTestFile(t, sourcePath)); diff != "" {
+			t.Fatal(diff)
+		}
+		expectedTest := input
+		if len(args) > 0 {
+			expectedTest = want
+		}
+		if diff := cmp.Diff(expectedTest, readTestFile(t, testPath)); diff != "" {
+			t.Fatal(diff)
+		}
 	}
 }

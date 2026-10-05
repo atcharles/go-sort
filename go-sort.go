@@ -3,12 +3,14 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
 	"go/format"
 	"go/parser"
 	"go/token"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -27,10 +29,16 @@ import (
 //go:generate go mod tidy
 //go:generate go install -v -trimpath -ldflags "-s -w" go-sort.go
 func main() {
-	log.SetFlags(0)
-	cfg := parseFlags()
-	if e := sortFile(cfg); e != nil {
-		log.Fatalln(e)
+	logger := log.New(os.Stderr, "", 0)
+	cfg, parseErr := parseFlags(os.Args[1:], os.Stderr)
+	if errors.Is(parseErr, flag.ErrHelp) {
+		return
+	}
+	if parseErr != nil {
+		logger.Fatal(parseErr)
+	}
+	if sortErr := sortFile(cfg); sortErr != nil {
+		logger.Fatal(sortErr)
 	}
 }
 
@@ -69,34 +77,28 @@ func (l letterDeclList) Less(i, j int) bool {
 
 func (l letterDeclList) Swap(i, j int) { l[i], l[j] = l[j], l[i] }
 
-func getDirGoFiles(dir string, args ...any) []string {
+type fileOptions struct {
+	includeTests bool
+	recursive    bool
+}
+
+func getDirGoFiles(dir string, options fileOptions) ([]string, error) {
 	if dir == "./..." || dir == "./" || dir == "." || dir == "" {
 		dir = "."
 	}
-	useTest := false
-	recursive := true
-	for _, arg := range args {
-		switch _arg := arg.(type) {
-		case bool:
-			// Back-compat: first bool is included tests, second bool is recursive.
-			if !useTest {
-				useTest = _arg
-			} else {
-				recursive = _arg
-			}
-		}
-	}
+	dir = filepath.Clean(dir)
 	var files []string
-	walkFn := func(path string, info fs.FileInfo, err error) error {
-		if err != nil {
-			return nil
+	walkFn := func(path string, info fs.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
 		if info.IsDir() {
 			switch info.Name() {
 			case ".git", "vendor":
 				return filepath.SkipDir
+			default:
 			}
-			if !recursive && path != dir {
+			if !options.recursive && path != dir {
 				return filepath.SkipDir
 			}
 			return nil
@@ -104,18 +106,20 @@ func getDirGoFiles(dir string, args ...any) []string {
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		if !useTest && strings.HasSuffix(path, "_test.go") {
+		if !options.includeTests && strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		abs, e := filepath.Abs(path)
-		if e != nil {
-			return e
+		absolute, absErr := filepath.Abs(path)
+		if absErr != nil {
+			return fmt.Errorf("resolve path %s: %w", path, absErr)
 		}
-		files = append(files, abs)
+		files = append(files, absolute)
 		return nil
 	}
-	_ = filepath.Walk(dir, walkFn)
-	return files
+	if walkErr := filepath.Walk(dir, walkFn); walkErr != nil {
+		return nil, fmt.Errorf("walk %s: %w", dir, walkErr)
+	}
+	return files, nil
 }
 
 func getFuncReceiverTypeName(decl ast.Decl) string {
@@ -149,8 +153,8 @@ func getTypeFromFile(f *ast.File, name string) ast.Decl {
 			continue
 		}
 		for _, spec := range _decl.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok {
+			ts, _ok := spec.(*ast.TypeSpec)
+			if !_ok {
 				continue
 			}
 			if ts.Name != nil && ts.Name.Name == name {
@@ -204,21 +208,25 @@ func loadFile(cfg config) string {
 	return path
 }
 
-func parseFlags() config {
-	var cfg config
-	flag.BoolVar(&cfg.recursive, "r", true, "recurse into subdirectories")
-	flag.BoolVar(&cfg.includeTests, "tests", false, "include *_test.go files")
-	flag.BoolVar(&cfg.write, "w", true, "write result back to file")
-	flag.Parse()
-
-	// Default path: last arg if present, else current dir.
-	args := flag.Args()
-	if len(args) == 0 {
-		cfg.path = "."
-	} else {
-		cfg.path = args[len(args)-1]
+func parseFlags(args []string, output io.Writer) (config, error) {
+	cfg := config{path: "."}
+	flags := flag.NewFlagSet("go-sort", flag.ContinueOnError)
+	flags.SetOutput(output)
+	flags.BoolVar(&cfg.recursive, "r", true, "recurse into subdirectories")
+	flags.BoolVar(&cfg.includeTests, "tests", false, "include *_test.go files")
+	flags.BoolVar(&cfg.write, "w", true, "write result back to file")
+	if parseErr := flags.Parse(args); parseErr != nil {
+		return config{}, fmt.Errorf("parse flags: %w", parseErr)
 	}
-	return cfg
+	positional := flags.Args()
+	if len(positional) > 0 && positional[0] == "test" {
+		cfg.includeTests = true
+		positional = positional[1:]
+	}
+	if len(positional) > 0 {
+		cfg.path = positional[len(positional)-1]
+	}
+	return cfg, nil
 }
 
 func sortActionByFilename(filename string, write bool) (changed bool, err error) {
@@ -248,7 +256,11 @@ func sortActionByFilename(filename string, write bool) (changed bool, err error)
 }
 
 func sortFile(cfg config) (err error) {
-	for _, file := range getDirGoFiles(loadFile(cfg), cfg.includeTests, cfg.recursive) {
+	files, walkErr := getDirGoFiles(loadFile(cfg), fileOptions{includeTests: cfg.includeTests, recursive: cfg.recursive})
+	if walkErr != nil {
+		return walkErr
+	}
+	for _, file := range files {
 		_, err = sortActionByFilename(file, cfg.write)
 		if err != nil {
 			return fmt.Errorf("sort file %s error: %w", file, err)
